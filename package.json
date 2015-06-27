@@ -1,0 +1,29 @@
+{
+  "name": "rotatable",
+  "version": "1.1.4",
+  "description": "Rotate streams into different destinations as data flows through",
+  "main": "index.js",
+  "scripts": {
+    "test": "node_modules/mocha/bin/mocha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avinoamr/rotatable.git"
+  },
+  "keywords": [
+    "rotate",
+    "stream"
+  ],
+  "author": "Roi Avinoam <avinoamr@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/avinoamr/rotatable/issues"
+  },
+  "homepage": "https://github.com/avinoamr/rotatable",
+  "devDependencies": {
+    "mocha": "^2.2.5"
+  },
+  "dependencies": {
+    "bytes": "^2.1.0"
+  }
+}
