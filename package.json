@@ -1,6 +1,6 @@
 {
   "name": "rotatable",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Rotate streams into different destinations as data flows through",
   "main": "index.js",
   "scripts": {

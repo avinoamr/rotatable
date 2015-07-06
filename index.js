@@ -13,9 +13,6 @@ function rotatable( _stream ) {
 
     // pass the options argument into the PassThrough constructor, as-is
     if ( _stream.constructor == Object ) {
-        
-        // default high water mark of 1, for minimal memory overhead
-        _stream.highWaterMark || ( _stream.highWaterMark = 1 );
         _stream = new stream.PassThrough( _stream );
     }
 
@@ -36,7 +33,6 @@ function rotatable( _stream ) {
 util.inherits( RotateStream, stream.PassThrough );
 function RotateStream( rotatefn, options ) {
     options || ( options = {} );
-    options.highWaterMark = 1;
     stream.PassThrough.call( this, options );
 
     if ( typeof rotatefn == "object" ) {
