@@ -1,7 +1,7 @@
 {
   "name": "rotatable",
-  "version": "1.1.5",
-  "description": "Rotate streams into different destinations as data flows through",
+  "version": "2.1.0",
+  "description": "Rotatable WriteStream",
   "main": "index.js",
   "scripts": {
     "test": "node_modules/mocha/bin/mocha"

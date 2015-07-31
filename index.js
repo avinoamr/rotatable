@@ -1,3 +1,4 @@
+var fs = require( "fs" );
 var util = require( "util" );
 var bytes = require( "bytes" );
 var stream = require( "stream" );
@@ -5,91 +6,61 @@ var stream = require( "stream" );
 module.exports = rotatable;
 module.exports.RotateStream = RotateStream;
 
-function rotatable( _stream ) {
-    // default pass-through
-    if ( arguments.length == 0 ) {
-        _stream = {};
-    }
-
-    // pass the options argument into the PassThrough constructor, as-is
-    if ( _stream.constructor == Object ) {
-        _stream = new stream.PassThrough( _stream );
-    }
-
-    if ( !_stream.pipe || !_stream.read ) {
-        throw new Error( "Non-readable streams are not forkable" );
-    }
-
-    _stream.rotate = function ( rotatefn, options ) {
-        options || ( options = {} );
-        options.objectMode = this._readableState.objectMode;
-        return this.pipe( new RotateStream( rotatefn, options ) );
-    }
-
-    return _stream;
+function rotatable( path, options ) {
+    return new RotateStream( path, options );
 }
 
-
-util.inherits( RotateStream, stream.PassThrough );
-function RotateStream( rotatefn, options ) {
+util.inherits( RotateStream, fs.WriteStream );
+function RotateStream( path, options ) {
     options || ( options = {} );
-    stream.PassThrough.call( this, options );
+    fs.WriteStream.call( this, path, options );
 
-    if ( typeof rotatefn == "object" ) {
-        var options = rotatefn;
-        rotatefn = function ( data, size ) {
-            var maxsize = isNaN( options.size )
-                ? bytes( options.size ) : options.size;
-            return size >= maxsize;
-        }
-    }
+    this.size = 100;
 
-    this._rotatableState = { 
-        rotatefn: rotatefn,
-        pipefn: function () {
-            throw new Error( "No pipe function was defined" )
-        },
-        destination: null,
-        count: 0,
-        size: 0
-    };
+    this.on( "open", function () {
+
+    })
 }
 
-RotateStream.prototype.pipe = function ( pipefn ) {
-    if ( typeof pipefn != "function" ) {
-        throw new Error( "Rotatable pipes must be a function" );
-    }
+RotateStream.prototype._write = function ( data, encoding, cb ) {
+    var that = this;
 
-    this._rotatableState.pipefn = pipefn;
-    return this;
-}
+    var _cb = function ( err ) {
+        if ( err ) return cb( err );
 
-RotateStream.prototype._transform = function ( data, enc, done ) {
-    var state = this._rotatableState;
-    var rotate = state.rotatefn.call( this, data, state.size );
-    if ( rotate || !state.destination ) {
-        if ( state.destination ) {
-            this.unpipe( state.destination );
-            state.destination.end();
-        }
-
-        try {
-            var pipeto = state.pipefn.call( this, state.count ++ );
-            if ( !pipeto || !pipeto.write ) {
-                throw new Error( "Pipe function returned a non-writable stream" );
+        fs.fstat( that.fd, function ( err, stats ) {
+            if ( err ) {
+                return cb( err );
             }
-            state.destination = pipeto;
-            stream.PassThrough.prototype.pipe.call( this, pipeto );
-        } catch ( err ) {
-            this.emit( "error", err );
-        }
+            console.log( that.path, stats.dev, stats.ino, stats.nlink, stats.rdev );
 
-        state.size = 0; // reset the size
+            if ( stats.size >= that.size ) {
+                // return that._rotate(function ( err ) {
+                //     if ( err ) return cb( err );
+                    // cb();
+                // })
+            }
+
+            cb();
+        });
     }
 
-    state.size += this._writableState.objectMode ? 1 : data.length;
-    return stream.PassThrough.prototype._transform.apply( this, arguments );
+    return fs.WriteStream.prototype._write.call( this, data, encoding, _cb );
 }
 
+RotateStream.prototype._rotate = function ( cb ) {
+    var that = this;
+    var path = this.path + "." + new Date().toISOString();
 
+    this.bytesWritten = 0;
+    fs.rename( this.path, path, function ( err ) {
+        if ( err ) {
+            return cb( err );
+        }
+
+        that.emit( "rotate", path );
+        that.open();
+        cb();
+    })
+}
 
