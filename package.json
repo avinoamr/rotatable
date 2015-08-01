@@ -1,7 +1,7 @@
 {
   "name": "rotatable",
-  "version": "2.1.0",
-  "description": "Rotatable WriteStream",
+  "version": "2.1.12",
+  "description": "Rotatable Write Stream",
   "main": "index.js",
   "scripts": {
     "test": "node_modules/mocha/bin/mocha"

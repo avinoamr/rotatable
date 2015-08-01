@@ -20,13 +20,20 @@ function RotateStream( path, options ) {
         options.flags = "a";
     }
 
+    if ( !options.size ) {
+        options.size = "5gb";
+    }
+
     if ( options.flags.indexOf( "a" ) == -1 ) {
         throw new Error( "RotateStream must be opened in append mode" );
     }
 
     fs.WriteStream.call( this, path, options );
 
-    this.size = 100;
+    this.size = isNaN( options.size )
+        ? bytes( options.size ) : options.size;
+
+    this.suffix = options.suffix || "";
 
     var that = this;
     this.on( "open", function () {
@@ -74,7 +81,7 @@ RotateStream.prototype._write = function ( data, encoding, cb ) {
 
         // file exceeds the maximum rotation size
         if ( stats.size >= that.size ) {
-            var suffix = stats.birthtime.toISOString();
+            var suffix = stats.birthtime.toISOString() + that.suffix;
             return that._rotate( suffix, function ( err ) {
                 if ( err ) {
                     return cb( err );
@@ -87,7 +94,9 @@ RotateStream.prototype._write = function ( data, encoding, cb ) {
         }
 
         // all is well, write the data
-        _write.call( that, data, encoding, cb );
+        _write.call( that, data, encoding, function ( err ) {
+            cb( err )
+        });
     })
 }
 
@@ -122,7 +131,6 @@ RotateStream.prototype._rotate = function ( suffix, cb ) {
                 }
 
                 _cb();
-
                 that.emit( "rotate", path );
             })
         })
@@ -133,8 +141,6 @@ RotateStream.prototype._rotate = function ( suffix, cb ) {
             cb( unlockerr || err );
         })
     }
-
-
 }
 
 
