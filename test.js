@@ -1,6 +1,15 @@
 var rotatable = require( "./index" );
 
-var f = rotatable( "test.log", { flags: "w" } );
+var f = rotatable( "test.log", { flags: "a" } )
+    .on( "error", function ( err ) {
+        console.error( err )
+    })
+    .on( "open", function () {
+        console.log( "REOPEN" );
+    })
+    .on( "rotate", function ( path ) {
+        console.log( "ROTATED", path )
+    })
 w();
 
 function w() {
@@ -9,7 +18,7 @@ function w() {
         if ( err ) {
             console.error( err );
         } else {
-            setTimeout( w, 500 );
+            setTimeout( w, 30 );
         }
     })
 }

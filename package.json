@@ -24,6 +24,7 @@
     "mocha": "^2.2.5"
   },
   "dependencies": {
-    "bytes": "^2.1.0"
+    "bytes": "^2.1.0",
+    "lockfile": "^1.0.1"
   }
 }
