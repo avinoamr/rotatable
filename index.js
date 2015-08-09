@@ -53,6 +53,7 @@ RotateStream.prototype._reopen = function ( cb ) {
     this.bytesWritten = 0;
     this.pos = 0;
     that.close( function () {
+        that.closed = that.destroyed = false;
         that.once( "open", cb )
             .open();
     })

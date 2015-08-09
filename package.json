@@ -1,6 +1,6 @@
 {
   "name": "rotatable",
-  "version": "2.1.12",
+  "version": "2.1.13",
   "description": "Rotatable Write Stream",
   "main": "index.js",
   "scripts": {
