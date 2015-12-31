@@ -207,8 +207,10 @@ RotateStream.prototype._upload = function ( path ) {
     }
 
     path = this._uploadq[ 0 ];
+    var date = path.match( /(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}\.\d{3}Z/ )
+    var fname = pathlib.basename( path );
     var s3 = this._s3;
-    var key = pathlib.join( s3.prefix, pathlib.basename( path ) );
+    var key = pathlib.join( s3.prefix, date[ 1 ], date[ 2 ], date[ 3 ], fname );
 
     this.emit( 'upload', path, s3.bucket + '/' + key );
     s3.putObject({
