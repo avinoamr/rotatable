@@ -2,6 +2,7 @@ var fs = require( 'fs' );
 var zlib = require( 'zlib' );
 var util = require( 'util' );
 var bytes = require( 'bytes' );
+var pathlib = require( 'path' );
 var stream = require( 'stream' );
 var lockfile = require( 'lockfile' );
 
@@ -51,12 +52,14 @@ function RotateStream( path, options ) {
         })
     })
 
+    this._compressq = [];
     if ( options.gzip ) {
         this.on( 'rotated', function ( _, path ) {
-            this._compress( path );
+            process.nextTick( this._compress.bind( this, path ) );
         });
     }
 
+    this._uploadq = [];
     if ( options.upload ) {
         if ( !aws ) {
             throw new Error( 'The aws-sdk module isn\'t installed' )
@@ -88,12 +91,12 @@ function RotateStream( path, options ) {
             s3.secretAccessKey = credentials[ 1 ];
         }
 
-        s3 = new aws.S3( s3 );
-        s3.bucket = bucket;
-        s3.prefix = prefix;
+        this._s3 = new aws.S3( s3 );
+        this._s3.bucket = bucket;
+        this._s3.prefix = prefix;
 
         this.on( options.gzip ? 'compressed' : 'rotated', function ( _, path ) {
-            this._upload( path, s3 );
+            process.nextTick( this._upload.bind( this, path ) );
         });
     }
 }
@@ -139,7 +142,8 @@ RotateStream.prototype._write = function ( data, encoding, cb ) {
 
         // file exceeds the maximum rotation size
         if ( stats.size >= that.size ) {
-            var suffix = stats.birthtime.toISOString() + that.suffix;
+            var rand = '.' + Math.random().toString( 36 ).substr( 2, 6 );
+            var suffix = stats.birthtime.toISOString() + rand + that.suffix;
 
             return that._rotate( suffix, function ( err ) {
                 if ( err ) {
@@ -162,6 +166,15 @@ RotateStream.prototype._write = function ( data, encoding, cb ) {
 
 RotateStream.prototype._compress = function ( path ) {
     var that = this;
+    if ( path ) {
+        this._compressq.push( path );
+        if ( this._compressq.length > 1 ) {
+            return; // compression already running
+        }
+    }
+
+    // process the next path in the queue
+    path = this._compressq[ 0 ];
     var pathGzip = path + '.gz';
     this.emit( 'compress', path, pathGzip );
     fs.createReadStream( path )
@@ -169,16 +182,33 @@ RotateStream.prototype._compress = function ( path ) {
         .pipe( fs.createWriteStream( pathGzip ) )
         .once( 'error', this.emit.bind( this, 'error' ) )
         .once( 'finish', function () {
+            that.emit( 'compressed', path, pathGzip );
+
+            // remove the current path from the queue
+            that._compressq.shift();
+
+            // if it's not empty, continue to the next one
+            if ( that._compressq.length ) {
+                that._compress();
+            }
+
             // remove the uncompressed file
-            that._unlink( path, function () {
-                that.emit( 'compressed', path, pathGzip );
-            })
+            that._unlink( path )
         });
 }
 
-RotateStream.prototype._upload = function ( path, s3 ) {
+RotateStream.prototype._upload = function ( path ) {
     var that = this;
-    var key = s3.prefix + '/' + require( 'path' ).basename( path );
+    if ( path ) {
+        this._uploadq.push( path );
+        if ( this._uploadq.length > 1 ) {
+            return; // upload already running
+        }
+    }
+
+    path = this._uploadq[ 0 ];
+    var s3 = this._s3;
+    var key = pathlib.join( s3.prefix, pathlib.basename( path ) );
 
     this.emit( 'upload', path, s3.bucket + '/' + key );
     s3.putObject({
@@ -191,10 +221,18 @@ RotateStream.prototype._upload = function ( path, s3 ) {
         that.emit( 'uploading', path, s3.bucket + '/' + key, progress );
     })
     .on( 'success', function () {
+        that.emit( 'uploaded', path, s3.bucket + '/' + key );
+
+        // remove the current path from the queue
+        that._uploadq.shift();
+
+        // if it's not empty, continue to the next one
+        if ( that._uploadq.length ) {
+            that._upload();
+        }
+
         // remove the uploaded file
-        that._unlink( path, function () {
-            that.emit( 'uploaded', path, s3.bucket + '/' + key );
-        })
+        that._unlink( path )
     })
     .send()
 }
@@ -207,7 +245,9 @@ RotateStream.prototype._unlink = function ( path, cb ) {
             that.emit( 'error', err );
         } else {
             that.emit( 'deleted', path );
-            cb();
+            if ( cb ) {
+                cb();
+            }
         }
     })
 }
