@@ -22,68 +22,63 @@ program
     .option( '-v, --verbose', 'output verbose messages' )
     .parse( process.argv );
 
-
-if ( !program.args.length ) {
-    console.error( 'Error: No destination FILE was specified' )
-    program.help();
-}
-
-if ( program.config === true ) {
-    program.config = 'rotatable';
-}
-
-if ( program.config && !config ) {
-    console.error( 'Error: The config module isn\'t installed' )
-    program.help();
-}
-
-var conf = program.config 
-    ? config.get( program.config )
-    : {};
-
 try {
+    if ( !program.args.length ) {
+        throw new Error( 'No destination FILE was specified' );
+    }
+
+    if ( program.config === true ) {
+        program.config = 'rotatable';
+    }
+
+    if ( program.config && !config ) {
+        throw new Error( 'The config module isn\'t installed' )
+    }
+
+    var conf = program.config 
+        ? config.get( program.config )
+        : {};
+
+    var verbose = program.verbose;
     var stream = rotatable( program.args[ 0 ], {
         size: program.size || conf.size,
         gzip: program.gzip || conf.gzip,
         upload: program.upload || conf.upload
-    });
+    })
+    .on( 'rotate', function ( path, to ) {
+        verbose && console.log( 'Rotating  ', path, '=>', to, '...' );
+    })
+    .on( 'rotated', function ( path, to ) {
+        verbose && console.log( 'Rotated   ', path, '=>', to );
+    })
+    .on( 'compress', function ( path, to ) {
+        verbose && console.log( 'Gzipping  ', path, '=>', to, '...' );
+    })
+    .on( 'compressed', function ( path, to ) {
+        verbose && console.log( 'Gzipped   ', path, '=>', to );
+    })
+    .on( 'upload', function ( path, to ) {
+        verbose && console.log( 'Uploading ', path, '=>', to, '...' );
+    })
+    .on( 'uploaded', function ( path, to ) {
+        verbose && console.log( 'Uploaded  ', path, '=>', to );
+    })
+    .on( 'delete', function ( path ) {
+        verbose && console.log( 'Deleting  ', path );
+    })
+    .on( 'deleted', function ( path ) {
+        verbose && console.log( 'Deleted   ', path );
+    })
+
+    process.stdin
+        .pipe( stream )
 } catch ( err ) {
     console.error( err.toString() );
-    program.help()
+    program.help();
 }
 
-if ( program.verbose ) {
-    stream
-        .on( 'rotate', function ( path, to ) {
-            console.log( 'Rotating  ', path, '=>', to, '...' );
-        })
-        .on( 'rotated', function ( path, to ) {
-            console.log( 'Rotated   ', path, '=>', to );
-        })
-        .on( 'compress', function ( path, to ) {
-            console.log( 'Gzipping  ', path, '=>', to, '...' );
-        })
-        .on( 'compressed', function ( path, to ) {
-            console.log( 'Gzipped   ', path, '=>', to );
-        })
-        .on( 'upload', function ( path, to ) {
-            console.log( 'Uploading ', path, '=>', to, '...' );
-        })
-        .on( 'uploaded', function ( path, to ) {
-            console.log( 'Uploaded  ', path, '=>', to );
-        })
-        .on( 'delete', function ( path ) {
-            console.log( 'Deleting  ', path );
-        })
-        .on( 'deleted', function ( path ) {
-            console.log( 'Deleted   ', path );
-        })
-}
 
-process.stdin
-    .pipe( stream )
-    .on( 'error', function ( err ) {
-        console.error( err.toString() );
-        process.exit( 1 );
-    })
+
+
+
 
