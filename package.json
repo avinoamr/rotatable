@@ -1,10 +1,13 @@
 {
   "name": "rotatable",
-  "version": "2.1.13",
+  "version": "2.2.1",
   "description": "Rotatable Write Stream",
   "main": "index.js",
   "scripts": {
     "test": "node_modules/mocha/bin/mocha"
+  },
+  "bin": {
+    "rotatable": "./cli.js"
   },
   "repository": {
     "type": "git",
@@ -25,6 +28,7 @@
   },
   "dependencies": {
     "bytes": "^2.1.0",
+    "commander": "^2.9.0",
     "lockfile": "^1.0.1"
   }
 }
