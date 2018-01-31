@@ -1,6 +1,6 @@
 {
   "name": "rotatable",
-  "version": "2.2.4",
+  "version": "3.0.0",
   "description": "Rotatable Write Stream",
   "main": "index.js",
   "scripts": {
@@ -27,8 +27,9 @@
     "mocha": "^2.2.5"
   },
   "dependencies": {
-    "bytes": "^2.1.0",
+    "bluebird": "^3.5.1",
+    "bytes": "^3.0.0",
     "commander": "^2.9.0",
-    "lockfile": "^1.0.1"
+    "lockfile": "^1.0.3"
   }
 }
