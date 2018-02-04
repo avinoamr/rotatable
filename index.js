@@ -1,16 +1,20 @@
-var util = require('util');
-var bytes = require('bytes');
-var pathlib = require('path');
 var stream = require('stream');
-var Promise = require('bluebird');
-var fs = Promise.promisifyAll(require('fs'))
-var zlib = Promise.promisifyAll(require('zlib'))
-var lockfile = Promise.promisifyAll(require('lockfile'))
+var pathlib = require('path');
+var util = require('util');;
+var zlib = require('zlib');
+var fs = require('fs')
+
+var bytes = require('bytes');
+// var Promise = require('bluebird');
+var lockfile = require('lockfile');
 var aws;
+
+
+
 try {
     aws = require('aws-sdk');
+    var s3 = Promise.promisifyAll(new aws.S3())
 } catch (err) {}
-const s3 = Promise.promisifyAll(new aws.S3())
 
 var DEFAULT_SIZE = '5gb';
 var DEFAULT_FLAGS = 'a';
@@ -48,13 +52,12 @@ class RotateStream extends fs.WriteStream {
         this.suffix = options.suffix || '';
 
         this.on('open', function () {
-            fs.fstat(this.fd, function (err, stats) {
-                if (err) {
-                    this.emit('error', err);
-                } else {
-                    this.ino = stats.ino;
-                }
-            })
+            try {
+                var stats = fs.fstatSync(this.fd)
+                this.ino = stats.ino;
+            } catch (err) {
+                this.emit('error', err);
+            }
         })
 
         if (options.upload) {
@@ -88,7 +91,7 @@ class RotateStream extends fs.WriteStream {
                 s3.secretAccessKey = credentials[1];
             }
 
-            this._s3 = new aws.S3(s3);
+            this._s3 = s3;
             this._s3.bucket = bucket;
             this._s3.prefix = prefix;
         }
@@ -98,156 +101,159 @@ class RotateStream extends fs.WriteStream {
      * reopen
      * @private
      */
-    _reopen = function () {
+    _reopen() {
 
         this.bytesWritten = 0;
         this.pos = 0;
-
-        return fs.closeAsync(this.fd)
-            .then(() => {
-                this.closed = this.destroyed = false;
-                this.open();
-            })
-            .catch(() => {
-                this.emit('error', err);
-            });
-        this.fd = null;
+        try {
+            fs.closeSync(this.fd)
+            this.closed = this.destroyed = false;
+            this.open();
+            this.fd = null;
+        } catch (err) {
+            this.emit('error', err);
+        }
     }
 
     /**
      * write
      * @private
      */
-    _write = function (data, encoding, callback) {
+    _write(data, encoding, callback) {
+        var self = this;
+        var stats = fs.statSync(this.path)
 
-        fs.statAsync(this.path)
-            .then((stats) => {
-                if (stats.size >= this.size) {
-                    var rand = '.' + Math.random().toString(36).substr(2, 6);
-                    var suffix = stats.birthtime.toISOString() + rand + this.suffix;
-                    return this._rotate(suffix)
-                        .then(this._reopen)
-                        .catch(callback)
-                }
-            })
-            .then(() => {
-                // all is well, write the data
-                super._write.call(this, data, encoding, callback);
-            })
+        if (stats.size >= this.size) {
+            var rand = '.' + Math.random().toString(36).substr(2, 6);
+            var suffix = stats.birthtime.toISOString() + rand + this.suffix;
+            var rotatedPath = _rotate(this.path, suffix, this.compress, self);
+            this._reopen();
 
-    }
-
-    /**
-     * compress
-     * @private
-     */
-    _compress = function (path) {
-
-        return new Promise((resolve, reject) => {
-            var pathGzip = path + '.gz';
-            this.emit('compress', path, pathGzip);
-
-            fs.createReadStream(path)
-                .pipe(zlib.createGzip())
-                .pipe(fs.createWriteStream(pathGzip))
-                .once('error', (err) => {
-                    this.emit.bind(this, 'error');
-                    reject(err)
+            (this.compress ?
+                _compress(rotatedPath, self) :
+                Promise.resolve(rotatedPath))
+            .then((path) => {
+                    return _upload(path, self._s3, self);
                 })
-                .once('finish', function () {
-                    this.emit('compressed', path, pathGzip);
-                    // remove the uncompressed file
-                    this._unlink(path);
-                    resolve(pathGzip)
-                });
-        });
-    }
-
-    /**
-     * upload
-     * @private
-     */
-    _upload = function (path) {
-
-        var date = path.match(/(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}\.\d{3}Z/)
-        var fname = pathlib.basename(path);
-        var s3 = this._s3;
-        var key = pathlib.join(s3.prefix, date[1], date[2], date[3], fname);
-        this.emit('upload', path, s3.bucket + '/' + key);
-
-        return new Promise((resolve, reject) => {
-            s3.putObject({
-                    Bucket: s3.bucket,
-                    Key: key,
-                    Body: fs.createReadStream(path)
+                .then(() => {
+                    this._reopen.call(self);
+                    super._write.call(self, data, encoding, callback);
                 })
-                .on('httpUploadProgress', function (progress) {
-                    this.emit('uploading', path, s3.bucket + '/' + key, progress);
-                })
-                .on('success', function (response) {
-                    this.emit('uploaded', path, s3.bucket + '/' + key);
-                    // remove the uploaded file
-                    this._unlink(path, resolve)
-                })
-                .on('error', (response) => {
-                    this.emit.bind(this, 'error');
-                    reject(new Error('Failed to upload file : ' + fname))
-                })
-                .send()
-        });
-    }
-
-    /**
-     * unlink
-     * @private
-     */
-    _unlink = function (path) {
-
-        this.emit('delete', path);
-        return fs.unlinkAsync(path)
-            .then(() => {
-                this.emit('deleted', path);
-            })
-            .catch(function (err) {
-                this.emit('error', err);
-            })
-    }
-
-    /**
-     * rotate
-     * @private
-     */
-    _rotate = function (suffix, callback) {
-
-        var path = this.path + '.' + suffix;
-        var lock = this.path + '.lock';
-
-        return lockfile.lockAsync(lock, {
-                stale: 10000,
-                wait: 5000
-            })
-            .then(fs.statAsync(this.path))
-            .then(fs.renameAsync(this.path, path))
-            .then(() => {
-                this.emit('rotate', this.path, path)
-            })
-            .then(() => {
-                if (this.compress) {
-                    return this._compress(path);
-                }
-                return path;
-            })
-            .then(this._upload)
-            .then(() => {
-                this.emit('rotated', this.path, path);
-            })
-            .then(callback)
-            .catch(callback)
-            .finally(() => {
-                return lockfile.unlockAsync(lock)
-            });
+                .catch(callback)
+        } else {
+            super._write.call(self, data, encoding, callback);
+        }
     }
 }
+
+
+/**
+ * upload
+ * @private
+ */
+function _upload(path, s3, stream) {
+
+    var date = path.match(/(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}\.\d{3}Z/)
+    var fileName = pathlib.basename(path);
+    var key = pathlib.join(s3.prefix, date[1], date[2], date[3], fileName);
+    stream.emit('upload', path, s3.bucket + '/' + key);
+
+    return new Promise((resolve, reject) => {
+        s3.putObject({
+                Bucket: s3.bucket,
+                Key: key,
+                Body: fs.createReadStream(path)
+            })
+            .on('httpUploadProgress', (progress) => {
+                stream.emit('uploading', path, s3.bucket + '/' + key, progress);
+            })
+            .on('success', (response) => {
+                stream.emit('uploaded', path, s3.bucket + '/' + key);
+                // remove the uploaded file
+                _unlink(path, stream)
+                resolve(response)
+            })
+            .on('error', (response) => {
+                stream.emit('error');
+                reject(new Error('Failed to upload file : ' + fileName))
+            })
+            .send()
+    });
+}
+
+
+/**
+ * rotate
+ * @private
+ */
+function _rotate(path, suffix, toCompress, stream) {
+
+    var newPath = path + '.' + suffix;
+    var lockPath = path + '.lock';
+
+    try {
+        lockfile.lockSync(lockPath, {
+            stale: 10000
+        });
+        var stats = fs.statSync(path);
+        stream.emit('rotate', path, newPath)
+        fs.renameSync(path, newPath);
+        if (toCompress) {
+            _compress(newPath, stream)
+                .then()
+        }
+        stream.emit('rotated', path, newPath);
+
+        return newPath;
+    } catch (err) {
+        stream.emit('error', err);
+    } finally {
+        lockfile.unlockSync(lockPath);
+    }
+}
+
+
+/**
+ * compress
+ * @private
+ */
+function _compress(path, stream) {
+    return new Promise((resolve, reject) => {
+        var pathGzip = path + '.gz';
+        stream.emit('compress', path, pathGzip);
+
+        var inFile = fs.createReadStream(path);
+
+        fs.createReadStream(path)
+            .pipe(zlib.createGzip())
+            .pipe(fs.createWriteStream(pathGzip))
+            .once('error', (err) => {
+                stream.emit('error', err);
+                reject(err)
+            })
+            .once('finish', function () {
+                stream.emit('compressed', path, pathGzip);
+                // remove the uncompressed file
+                _unlink(path, stream);
+                resolve(pathGzip)
+            });
+    });
+}
+
+
+/**
+ * unlink
+ * @private
+ */
+function _unlink(path, stream) {
+    stream.emit('delete', path);
+    try {
+        fs.unlinkSync(path)
+    } catch (err) {
+        stream.emit('error', err);
+    }
+}
+
 
 /**
  * Exports RotateStream class
