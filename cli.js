@@ -35,7 +35,7 @@ try {
         throw new Error( 'The config module isn\'t installed' )
     }
 
-    var conf = program.config 
+    var conf = program.config
         ? config.get( program.config )
         : {};
 

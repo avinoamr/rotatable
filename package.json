@@ -4,7 +4,8 @@
   "description": "Rotatable Write Stream",
   "main": "index.js",
   "scripts": {
-    "test": "node_modules/mocha/bin/mocha"
+    "lint": "eslint -c panoplyio --ext .js ./",
+    "test": "node_modules/mocha/bin/mocha test -s 0"
   },
   "bin": {
     "rotatable": "./cli.js"
@@ -24,7 +25,9 @@
   },
   "homepage": "https://github.com/avinoamr/rotatable",
   "devDependencies": {
-    "mocha": "^2.2.5"
+    "eslint": "3.19.0",
+    "eslint-config-panoplyio": "git://github.com/panoplyio/eslint-config-panoplyio.git#1.0.7",
+    "mocha": "5.0.0"
   },
   "dependencies": {
     "bluebird": "^3.5.1",
