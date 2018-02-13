@@ -124,7 +124,6 @@ class RotateStream extends fs.WriteStream {
                 // file has been changed
                 // (possibly rotated by a different process)
                 if ((self.ino && stats.ino !== self.ino)) {
-
                     return self._reopen()
                         .then(() => {
                             return fs.statAsync(self.path)
