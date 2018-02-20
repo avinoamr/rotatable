@@ -73,19 +73,14 @@ describe('rotatable tests', function () {
             rotates: []
         }
 
-        let data = [{
-            i: 1
-        }, {
-            i: 2
-        }, {
-            i: 3
-        }, {
-            i: 4
-        }, {
-            i: 5
-        }, {
-            i: 6
-        }]
+        let data = [
+            { i: 1 },
+            { i: 2 },
+            { i: 3 },
+            { i: 4 },
+            { i: 5 },
+            { i: 6 }
+        ]
 
         it('rotates at ~100B', function () {
             results.files.forEach(function (f) {
@@ -210,19 +205,14 @@ describe('rotatable tests', function () {
 
         beforeEach(function () {
             cleanup()
-            this.data = [{
-                i: 1
-            }, {
-                i: 2
-            }, {
-                i: 3
-            }, {
-                i: 4
-            }, {
-                i: 5
-            }, {
-                i: 6
-            }]
+            this.data = [
+                { i: 1 },
+                { i: 2 },
+                { i: 3 },
+                { i: 4 },
+                { i: 5 },
+                { i: 6 }
+            ]
         })
 
         afterEach(function () {
@@ -484,14 +474,14 @@ describe('rotatable tests', function () {
             let path = 'test.log'
 
             assert.throws(
-                    function () {
-                        createRotatable(path, {
-                            flags: 'w',
-                            size: 1000,
-                            suffix: '.something',
-                            gzip: true
-                        })
-                    },
+                function () {
+                    createRotatable(path, {
+                        flags: 'w',
+                        size: 1000,
+                        suffix: '.something',
+                        gzip: true
+                    })
+                },
                 /RotateStream must be opened in append mode/,
                 'unexpected error'
             )
@@ -592,13 +582,13 @@ describe('rotatable tests', function () {
             let path = 'test.log'
 
             assert.throws(
-                    function () {
-                        createRotatable(path, {
-                            upload: 'not a falsy value',
-                            size: 1000,
-                            gzip: true
-                        })
-                    },
+                function () {
+                    createRotatable(path, {
+                        upload: 'not a falsy value',
+                        size: 1000,
+                        gzip: true
+                    })
+                },
                 /The aws-sdk module isn't installed/,
                 'unexpected error'
             );
