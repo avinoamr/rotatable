@@ -2,7 +2,7 @@ let fs = require('fs')
 let assert = require('assert')
 let {
     createRotatable
-} = require('../index')
+} = require('./index')
 
 function nextWrite(data, streams, callBack, expectedResults) {
 
@@ -21,39 +21,40 @@ function nextWrite(data, streams, callBack, expectedResults) {
             stream.instance.end()
         })
         callBack(expectedResults)
-    }
+    } else {
 
-    let d = data.pop()
-    let writes = 0
+        let d = data.pop()
+        let writes = 0
 
-    streams.forEach(stream => {
-        let name = stream.name
-        d.w = name
-        let body = JSON.stringify(d) + '\n'
-        stream.instance.write(body, function () {
-            expectedResults[name].written += body.length
-            if (++writes === streams.length) {
-                ++expectedResults[name].writeCount
-                nextWrite(data, streams, callBack, expectedResults)
-            }
+        streams.forEach(stream => {
+            let name = stream.name
+            d.w = name
+            let body = JSON.stringify(d) + '\n'
+            stream.instance.write(body, function () {
+                expectedResults[name].written += body.length
+                if (++writes === streams.length) {
+                    ++expectedResults[name].writeCount
+                    nextWrite(data, streams, callBack, expectedResults)
+                }
+            })
         })
-    })
+    }
 }
 
 function cleanup() {
     fs.readdirSync('.')
         .filter(function (path) {
-            return path.indexOf('test.log') === 0;
+            return path.indexOf('test.log') === 0
         })
         .forEach(function (path) {
-            fs.unlinkSync(path);
+            fs.unlinkSync(path)
         })
 }
 
 function readFiles() {
     return fs.readdirSync('.')
         .filter(function (path) {
-            return path.indexOf('test.log') === 0;
+            return path.indexOf('test.log') === 0
         })
         .reduce(function (files, path) {
             files.push({
@@ -61,7 +62,7 @@ function readFiles() {
                 body: fs.readFileSync(path).toString(),
                 stats: fs.statSync(path)
             })
-            return files;
+            return files
         }, [])
 }
 
@@ -85,49 +86,49 @@ describe('rotatable tests', function () {
         it('rotates at ~100B', function () {
             results.files.forEach(function (f) {
                 assert(f.stats.size < 105,
-                    'file size is smaller than 105 bytes');
+                    'file size is smaller than 105 bytes')
 
                 if (f.path !== 'test.log') {
                     assert(f.stats.size > 100,
-                        'rotated file size is greater than 100 bytes');
+                        'rotated file size is greater than 100 bytes')
                 }
             })
-        });
+        })
 
         it('contains all of the data', function () {
             var out = results.files.map(function (f) {
                 return f.body
-            }).join('\n');
+            }).join('\n')
 
             var objs = out.split('\n')
                 .filter(function (line) {
-                    return !!line;
+                    return !!line
                 })
-                .map(JSON.parse);
+                .map(JSON.parse)
 
             data.forEach(function (d) {
                 var w1found = objs.filter(function (obj) {
-                    return obj.w === 'w1' && obj.i === d.i;
+                    return obj.w === 'w1' && obj.i === d.i
                 })
 
                 var w2found = objs.filter(function (obj) {
-                    return obj.w === 'w1' && obj.i === d.i;
-                });
+                    return obj.w === 'w1' && obj.i === d.i
+                })
 
-                assert.equal(w1found.length, 1);
-                assert.equal(w2found.length, 1);
+                assert.equal(w1found.length, 1)
+                assert.equal(w2found.length, 1)
             })
-        });
+        })
 
         it('emits rotate events', function () {
-            assert.equal(results.rotates.length, 1);
+            assert.equal(results.rotates.length, 1)
 
-            var file = results.rotates[0];
+            var file = results.rotates[0]
             assert.equal(file.indexOf('test.log'), 0)
         })
 
         before(function (done) {
-            cleanup();
+            cleanup()
 
             // create two parallel writers
             var w1 = createRotatable('test.log', {
@@ -137,7 +138,7 @@ describe('rotatable tests', function () {
                 .on('finish', finish)
                 .on('rotate', function (file) {
                     results.rotates.push(file)
-                });
+                })
             var w2 = createRotatable('test.log', {
                 size: 100,
                 suffix: '.2'
@@ -145,51 +146,51 @@ describe('rotatable tests', function () {
                 .on('finish', finish)
                 .on('rotate', function (file) {
                     results.rotates.push(file)
-                });
+                })
 
-            next();
+            next()
 
             function next(err) {
-                var d = data.pop();
+                var d = data.pop()
                 if (!d) {
-                    w1.end();
-                    w2.end();
-                    return;
+                    w1.end()
+                    w2.end()
+                    return
                 }
 
-                var saved = 0;
-                var body;
-                d.w = 'w1';
-                body = JSON.stringify(d) + '\n';
-                results.written += body.length;
+                var saved = 0
+                var body
+                d.w = 'w1'
+                body = JSON.stringify(d) + '\n'
+                results.written += body.length
                 w1.write(body, function () {
                     if (++saved === 2) {
-                        next();
+                        next()
                     }
-                });
+                })
 
-                d.w = 'w2';
-                body = JSON.stringify(d) + '\n';
-                results.written += body.length;
+                d.w = 'w2'
+                body = JSON.stringify(d) + '\n'
+                results.written += body.length
                 w2.write(body, function () {
                     if (++saved === 2) {
-                        next();
+                        next()
                     }
-                });
+                })
             }
 
-            var finished = 0;
+            var finished = 0
 
             function finish() {
                 if (++finished === 2) {
-                    results.files = readFiles();
-                    done();
+                    results.files = readFiles()
+                    done()
                 }
             }
 
         })
 
-        after(cleanup);
+        after(cleanup)
 
     })
 
@@ -591,7 +592,7 @@ describe('rotatable tests', function () {
                 },
                 /The aws-sdk module isn't installed/,
                 'unexpected error'
-            );
+            )
             done()
         })
     })

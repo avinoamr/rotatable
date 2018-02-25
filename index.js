@@ -117,11 +117,8 @@ class RotateStream extends fs.WriteStream {
     }).then((stats) => {  // rotating log file
       if (stats.size >= self.size) {
         let rand = '.' + Math.random().toString(36).substr(2, 6)
-        let suffix = (
-          stats.birthtime.toISOString()
-          + rand
-          + self.suffix
-        )
+        let suffix =
+          stats.birthtime.toISOString() + rand + self.suffix
         return _rotate(self.path, suffix, self)
           .bind(this).then(this._reopen)
       }
@@ -200,7 +197,6 @@ function _upload(path, stream) {
             })
         })
         .on('error', () => {
-          stream.emit('error')
           reject(new Error('Failed to upload file : ' + fileName))
         })
         .send()
@@ -250,6 +246,8 @@ function _compress(path, stream) {
           _unlink(path, stream)
             .then(() => {
               resolve(pathGzip)
+            }).catch((err) => {
+                reject(err)                
             })
         })
     }
