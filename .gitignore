@@ -27,3 +27,20 @@ build/Release
 # Dependency directory
 # https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
 node_modules
+
+# Specifies configuration for node's version manager
+.nvmrc
+
+# Users Environment Variables
+.lock-wscript
+.idea/
+
+#VIM undo files
+*.un~
+
+#VS Code files
+*.vscode/*
+.vscode*
+
+# OSX Hidden Files
+.DS_Store

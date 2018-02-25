@@ -1,301 +1,316 @@
-var fs = require( 'fs' );
-var zlib = require( 'zlib' );
-var util = require( 'util' );
-var bytes = require( 'bytes' );
-var pathlib = require( 'path' );
-var stream = require( 'stream' );
-var lockfile = require( 'lockfile' );
+var pathlib = require('path')
+var zlib = require('zlib')
 
-var aws;
+var Promise = require('bluebird')
+var bytes = require('bytes')
+var lockfile = Promise.promisifyAll(require('lockfile'))
+var fs = Promise.promisifyAll(require('fs'))
+var aws
+// we don't necessarily need aws because we may not want to upload
 try {
-    aws = require( 'aws-sdk' );
-} catch ( err ) {}
+  aws = require('aws-sdk')
+} catch (err) { }
 
-module.exports = rotatable;
-module.exports.RotateStream = RotateStream;
-
-function rotatable( path, options ) {
-    return new RotateStream( path, options );
+const DEFAULT_OPTIONS = {
+  flags: 'a',
+  size: '5gb',
+  suffix: ''
 }
-
-util.inherits( RotateStream, fs.WriteStream );
-function RotateStream( path, options ) {
-    options || ( options = {} );
-
-    if ( !options.flags ) {
-        options.flags = 'a';
+/**
+ * @class RotateStream
+ * @extends {fs.WriteStream}
+ */
+class RotateStream extends fs.WriteStream {
+  /**
+   * Given an local path and options initialize listeners,
+   * and return Stream instance ready to be writen on
+   * @param path
+   * @param options
+   */
+  constructor(path, options) {
+    options = Object.assign({}, DEFAULT_OPTIONS, options)
+    if (options.flags.indexOf('a') === -1) {
+      throw new Error('RotateStream must be opened in append mode')
     }
+    super(path, options)
 
-    if ( !options.size ) {
-        options.size = '5gb';
+    this.compress = options.gzip
+    this.size = isNaN(options.size) ? bytes(options.size) : options.size
+    this.suffix = options.suffix
+    if (options.upload) {
+      if (!aws) {
+        throw new Error('The aws-sdk module isn\'t installed')
+      }
+
+      this.toUpload = true
+      this._s3 = _getS3(options.upload)
     }
+  }
 
-    if ( options.flags.indexOf( 'a' ) == -1 ) {
-        throw new Error( 'RotateStream must be opened in append mode' );
-    }
+  /**
+   * @private
+   */
+  _openAsync() {
+    let self = this
+    return fs.openAsync(this.path, this.flags, this.mode)
+      .then((fd) => {
+        self.fd = fd
+        return fs.fstatAsync(fd)
+      })
+      .then((stats) => {
+        self.ino = stats.ino
+      })
+      .catch((err) => {
+        if (self.autoClose) {
+          self.destroy()
+        }
+        throw err
+      })
+  }
 
-    fs.WriteStream.call( this, path, options );
+  /**
+   * @private
+   */
+  _reopen() {
+    let self = this
 
-    this.size = isNaN( options.size )
-        ? bytes( options.size ) : options.size;
+    this.bytesWritten = 0
+    return fs.closeAsync(self.fd)
+      .then(() => {
+        self.closed = self.destroyed = false
+        self.fd = null
+      })
+      .bind(self).then(self._openAsync)
+  }
 
-    this.suffix = options.suffix || '';
+  /**
+   * @private
+   */
+  _write(data, encoding, callback) {
+    let self = this
+    let lock = this.path + '.lock'
 
-    var that = this;
-    this.on( 'open', function () {
-        fs.fstat( this.fd, function ( err, stats ) {
-            if ( err ) {
-                that.emit( 'error', err );
-            } else {
-                that.ino = stats.ino;
-            }
+    // locking the file to prevent paralel writes
+    lockfile.lockAsync(lock, {
+      stale: 10000,
+      wait: 5000
+    }).then(() => {
+      return fs.statAsync(self.path)
+    }).catch((err) => {
+      // if no entry, file has been moved or removed keep going
+      if (err.code === "ENOENT") {
+        return null // file has been moved or removed. force a re-open.
+      } else {
+        throw err
+      }
+    }).then((stats) => {
+      // file has been changed
+      // (possibly rotated by a different process)
+      if (!self.ino || !stats || self.ino && stats.ino !== self.ino) {
+        return self._reopen()
+          .then(() => {
+            return fs.statAsync(self.path)
+          })
+      } else {
+        return stats
+      }
+    }).then((stats) => {  // rotating log file
+      if (stats.size >= self.size) {
+        let rand = '.' + Math.random().toString(36).substr(2, 6)
+        let suffix =
+          stats.birthtime.toISOString() + rand + self.suffix
+        return _rotate(self.path, suffix, self)
+          .bind(this).then(this._reopen)
+      }
+    }).then(() => {
+      return self.writeAsync(data, encoding)
+    }).then(() => {
+      return lockfile.unlockAsync(lock)
+    }).then(() => {
+      callback()
+    }).catch((err) => {
+      self.emit('error', err)
+      callback(err)
+    })
+  }
+
+  writeAsync(data, encoding) {
+    let self = this
+
+    if (!(data instanceof Buffer))
+      return Promise.reject(new Error('Invalid data'))
+
+      return fs.writeAsync(this.fd, data, 0, data.length, this.pos)
+        .then((bytes) => {
+          self.bytesWritten += bytes
+
+          if (self.pos !== undefined)
+            self.pos += data.length
         })
-    })
-
-    this._compressq = [];
-    if ( options.gzip ) {
-        this.on( 'rotated', function ( _, path ) {
-            process.nextTick( this._compress.bind( this, path ) );
-        });
-    }
-
-    this._uploadq = [];
-    if ( options.upload ) {
-        if ( !aws ) {
-            throw new Error( 'The aws-sdk module isn\'t installed' )
-        }
-
-        var comps = options.upload.match( /s3\:\/\/((.*)\@)?([^\/]+)\/(.*)/ );
-
-        if ( !comps ) {
-            throw new Error( 'Malformed S3 upload path' );
-        }
-
-        var credentials = ( comps[ 2 ] || '' ).split( ':' );
-        var bucket = comps[ 3 ];
-        var prefix = comps[ 4 ] || '';
-
-        if ( !bucket ) {
-            throw new Error( 'S3 Upload bucket is not defined' );
-        }
-
-        var s3 = {
-            signatureVersion: 'v4'
-        }
-
-        if ( credentials[ 0 ] ) {
-            s3.accessKeyId = credentials[ 0 ];
-        }
-
-        if ( credentials[ 1 ] ) {
-            s3.secretAccessKey = credentials[ 1 ];
-        }
-
-        this._s3 = new aws.S3( s3 );
-        this._s3.bucket = bucket;
-        this._s3.prefix = prefix;
-
-        this.on( options.gzip ? 'compressed' : 'rotated', function ( _, path ) {
-            process.nextTick( this._upload.bind( this, path ) );
-        });
-    }
+        .catch((err) => {
+          if (self.autoClose) {
+            self.destroy()
+          }
+          throw err
+        })
+  }
 }
 
-RotateStream.prototype._reopen = function ( cb ) {
-    var that = this;
-
-    this.bytesWritten = 0;
-    this.pos = 0;
-
-    fs.close( this.fd, function ( err ) {
-        if ( err ) {
-            this.emit( 'error', err );
-        } else {
-            that.closed = that.destroyed = false;
-            that.once( 'open', cb )
-                .open();
-        }
-    });
-    this.fd = null;
-}
-
-RotateStream.prototype._write = function ( data, encoding, cb ) {
-    var that = this;
-
-    // we first need to check if the file has already been rotated by a 
-    // different process. while calling stat(2) on every batch could be 
-    // expansive - the cost is still relatively low compared to the whole write
-    // operation, and is mitigated by fs cache. We should still re-consider this
-    // approach
-    fs.stat( this.path, function ( err, stats ) {
-        if ( err && err.code != 'ENOENT' ) {
-            // if no entry, file has been moved or removed - keep going
-            return cb( err );
-        }
-
-        // file has been changed (possibly rotated by a different process),
-        if ( !stats || ( that.ino && stats.ino != that.ino ) ) {
-            return that._reopen( function () {
-                that._write.call( that, data, encoding, cb );
-            })
-        }
-
-        // file exceeds the maximum rotation size
-        if ( stats.size >= that.size ) {
-            var rand = '.' + Math.random().toString( 36 ).substr( 2, 6 );
-            var suffix = stats.birthtime.toISOString() + rand + that.suffix;
-
-            return that._rotate( suffix, function ( err ) {
-                if ( err ) {
-                    return cb( err );
-                }
-
-                that._reopen( function () {
-                    that._write.call( that, data, encoding, cb );
-                })
-            })
-        }
-
-        // all is well, write the data
-        fs.WriteStream.prototype._write
-            .call( that, data, encoding, function ( err ) {
-                cb( err )
-            });
-    })
-}
-
-RotateStream.prototype._compress = function ( path ) {
-    var that = this;
-    if ( path ) {
-        this._compressq.push( path );
-        if ( this._compressq.length > 1 ) {
-            return; // compression already running
-        }
-    }
-
-    // process the next path in the queue
-    path = this._compressq[ 0 ];
-    var pathGzip = path + '.gz';
-    this.emit( 'compress', path, pathGzip );
-    fs.createReadStream( path )
-        .pipe( zlib.createGzip() )
-        .pipe( fs.createWriteStream( pathGzip ) )
-        .once( 'error', this.emit.bind( this, 'error' ) )
-        .once( 'finish', function () {
-            that.emit( 'compressed', path, pathGzip );
-
-            // remove the current path from the queue
-            that._compressq.shift();
-
-            // if it's not empty, continue to the next one
-            if ( that._compressq.length ) {
-                that._compress();
-            }
-
-            // remove the uncompressed file
-            that._unlink( path )
-        });
-}
-
-RotateStream.prototype._upload = function ( path ) {
-    var that = this;
-    if ( path ) {
-        this._uploadq.push( path );
-        if ( this._uploadq.length > 1 ) {
-            return; // upload already running
-        }
-    }
-
-    path = this._uploadq[ 0 ];
-    var date = path.match( /(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}\.\d{3}Z/ )
-    var fname = pathlib.basename( path );
-    var s3 = this._s3;
-    var key = pathlib.join( s3.prefix, date[ 1 ], date[ 2 ], date[ 3 ], fname );
-
-    this.emit( 'upload', path, s3.bucket + '/' + key );
-    s3.putObject({
+/**
+ * @private
+ */
+function _upload(path, stream) {
+  return new Promise((resolve, reject) => {
+    if (!stream.toUpload) {
+      resolve(path)
+    } else {
+      let date = path.match(
+        /(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}\.\d{3}Z/)
+      let fileName = pathlib.basename(path)
+      let s3 = stream._s3
+      let key = pathlib.join(
+        s3.prefix,
+        date[1],
+        date[2],
+        date[3],
+        fileName
+      )
+      stream.emit('upload', path, s3.bucket + '/' + key)
+      s3.putObject({
         Bucket: s3.bucket,
         Key: key,
-        Body: fs.createReadStream( path )
-    })
-    .on( 'error', this.emit.bind( this, 'error' ) )
-    .on( 'httpUploadProgress', function ( progress ) {
-        that.emit( 'uploading', path, s3.bucket + '/' + key, progress );
-    })
-    .on( 'success', function () {
-        that.emit( 'uploaded', path, s3.bucket + '/' + key );
-
-        // remove the current path from the queue
-        that._uploadq.shift();
-
-        // if it's not empty, continue to the next one
-        if ( that._uploadq.length ) {
-            that._upload();
-        }
-
-        // remove the uploaded file
-        that._unlink( path )
-    })
-    .send()
-}
-
-RotateStream.prototype._unlink = function ( path, cb ) {
-    var that = this;
-    this.emit( 'delete', path );
-    fs.unlink( path, function ( err ) {
-        if ( err ) {
-            that.emit( 'error', err );
-        } else {
-            that.emit( 'deleted', path );
-            if ( cb ) {
-                cb();
-            }
-        }
-    })
-}
-
-RotateStream.prototype._rotate = function ( suffix, cb ) {
-    var that = this;
-    var path = this.path + '.' + suffix;
-    var lock = this.path + '.lock';
-
-    // prevent multiple processes from rotating the same file
-    lockfile.lock( lock, { stale: 10000, wait: 5000 }, function ( err ) {
-        if ( err ) {
-            return _cb( err );
-        }
-
-        fs.stat( that.path, function ( err, stats ) {
-
-            // if no entry, file has been moved or removed - keep going
-            if ( err && err.code != 'ENOENT' ) {
-                return _cb( err );
-            }
-
-            // was the file externally renamed?
-            if ( !stats || that.ino != stats.ino ) {
-                return _cb();
-            }
-
-            that.emit( 'rotate', that.path, path );
-            fs.rename( that.path, path, function ( err ) {
-
-                // if no entry, file has been moved or removed - keep going
-                if ( err && err.code != 'ENOENT' ) {
-                    return _cb( err );
-                }
-
-                _cb();
-                that.emit( 'rotated', that.path, path );
+        Body: fs.createReadStream(path)
+      })
+        .on('httpUploadProgress', (progress) => {
+          stream.emit(
+            'uploading',
+            path,
+            s3.bucket + '/' + key,
+            progress)
+        })
+        .on('success', () => {
+          stream.emit('uploaded', path, s3.bucket + '/' + key)
+          // remove the uploaded file
+          return _unlink(path, stream)
+            .then(() => {
+              resolve('S3')
             })
         })
-    });
-
-    function _cb ( err ) {
-        lockfile.unlock( lock, function ( unlockerr ) {
-            cb( unlockerr || err );
+        .on('error', () => {
+          reject(new Error('Failed to upload file : ' + fileName))
         })
+        .send()
     }
+  })
 }
 
+/**
+ * @private
+ */
+function _rotate(originalPath, suffix, stream) {
 
+  let newPath = originalPath + '.' + suffix
+  stream.emit('rotate', originalPath, newPath)
+
+  return fs.renameAsync(originalPath, newPath)
+    .then(() => {
+      return _compress(newPath, stream)
+    })
+    .then((gZipedPath) => {
+      return _upload(gZipedPath, stream)
+    })
+    .tap((gZipedPath) => {
+      stream.emit('rotated', originalPath, gZipedPath || '')
+    })
+}
+
+/**
+ * @private
+ */
+function _compress(path, stream) {
+  return new Promise((resolve, reject) => {
+    let pathGzip = path + '.gz'
+
+    if (!stream.compress) {
+      resolve(path)
+    } else {
+      stream.emit('compress', path, pathGzip)
+      fs.createReadStream(path)
+        .pipe(zlib.createGzip())
+        .pipe(fs.createWriteStream(pathGzip))
+        .once('error', (err) => {
+          reject(err)
+        })
+        .once('finish', () => {
+          stream.emit('compressed', path, pathGzip)
+          _unlink(path, stream)
+            .then(() => {
+              resolve(pathGzip)
+            }).catch((err) => {
+                reject(err)                
+            })
+        })
+    }
+  })
+}
+
+/**
+ * @private
+ */
+function _getS3(upload) {
+  let comps = upload.match(/s3\:\/\/((.*)\@)?([^\/]+)\/(.*)/)
+  if (!comps) {
+    throw new Error('Malformed S3 upload path')
+  }
+  let bucket = comps[3]
+  if (!bucket) {
+    throw new Error('S3 Upload bucket is not defined')
+  }
+
+  let credentials = (comps[2] || '').split(':')
+  let prefix = comps[4] || ''
+  let options = {
+    signatureVersion: 'v4'
+  }
+  if (credentials[0]) {
+    options.accessKeyId = credentials[0]
+  }
+  if (credentials[1]) {
+    options.secretAccessKey = credentials[1]
+  }
+  s3Instance = new aws.S3(options)
+  s3Instance.bucket = bucket
+  s3Instance.prefix = prefix
+  return s3Instance
+}
+
+/**
+ * @private
+ */
+function _unlink(path, stream) {
+  stream.emit('delete', path)
+  return fs.unlinkAsync(path)
+    .catch((err) => {
+      // if no entry, file has been moved or removed - keep going
+      if (err.code !== 'ENOENT') {
+        throw err
+      }
+    })
+}
+
+/**
+ * Exports RotateStream class
+ * @param path
+ * @param options
+ * @returns {RotateStream}
+ */
+module.exports.createRotatable = (path, options) => {
+  return new RotateStream(path, options)
+}
+
+/**
+ * Export RotateStream constructor for tests.
+ * In code please use createRotateStream func.
+ * @type {RotateStream}
+ */
+module.exports.RotateStream = RotateStream
